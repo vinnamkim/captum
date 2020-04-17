@@ -27,18 +27,24 @@ class GaussianFilter(torch.nn.Module):
         self.dilation = 1
         self.groups = channels
         # Set these to whatever you want for your gaussian filter
-        kernel_size = 15
+        self.kernel_size = kernel_size
+        self.channels = channels
         #self.sigma = torch.autograd.Variable(torch.tensor(sigma, requires_grad=True))
-        self.log_sigma = torch.tensor(log_sigma, requires_grad=True)
+        self.log_sigma = torch.nn.Parameter(torch.tensor(log_sigma, requires_grad=True))
+
+        self.register_parameter('log_sigma', self.log_sigma)
+
+    def get_weight(self):
         variance = torch.exp(2. * self.log_sigma)
 
         # Create a x, y coordinate grid of shape (kernel_size, kernel_size, 2)
-        x_cord = torch.arange(kernel_size)
-        x_grid = x_cord.repeat(kernel_size).view(kernel_size, kernel_size)
+        x_cord = torch.arange(self.kernel_size)
+        x_grid = x_cord.repeat(self.kernel_size).view(
+            self.kernel_size, self.kernel_size)
         y_grid = x_grid.t()
-        xy_grid = torch.stack([x_grid, y_grid], dim=-1)
+        xy_grid = torch.stack([x_grid, y_grid], dim=-1).to(self.log_sigma.device)
 
-        mean = (kernel_size - 1) / 2.
+        mean = (self.kernel_size - 1) / 2.
 
         # Calculate the 2-dimensional gaussian kernel which is
         # the product of two gaussian distributions for two different
@@ -53,17 +59,19 @@ class GaussianFilter(torch.nn.Module):
 
         # Reshape to 2d depthwise convolutional weight
         gaussian_kernel = gaussian_kernel.unsqueeze(0).unsqueeze(0)
-        gaussian_kernel = gaussian_kernel.repeat(channels, 1, 1, 1)
-        self.weight = gaussian_kernel
+        gaussian_kernel = gaussian_kernel.repeat(self.channels, 1, 1, 1)
+        weight = gaussian_kernel
+        return weight
 
     def forward(self, x):
-        return F.conv2d(x, self.weight, self.bias, self.stride,
+        weight = self.get_weight()
+        return F.conv2d(x, weight, self.bias, self.stride,
                         self.padding, self.dilation, self.groups)
         # return self.conv2d_forward(x, self.weight)
 
     def get_dgf_dalpha(self, x):
         gf_x = self.forward(x)
-        v = torch.ones_like(gf_x, requires_grad=True)
+        v = torch.ones_like(gf_x, requires_grad=True).to(gf_x.device)
         vjp = torch.autograd.grad(gf_x, self.log_sigma,
                                   grad_outputs=v, create_graph=True)
         return torch.autograd.grad(vjp, v)[0]
@@ -286,9 +294,9 @@ class IntegratedBlurredGradients(GradientAttribution):
         # Keeps track whether original input is a tuple or not before
         # converting it into a tuple.
         is_inputs_tuple = _is_tuple(inputs)
-        
+
         inputs = _format_input(inputs)
-        
+
         baselines = [0 for _ in range(len(inputs))]
 
         _validate_input(inputs, baselines, n_steps, method)
@@ -317,7 +325,7 @@ class IntegratedBlurredGradients(GradientAttribution):
 
         if return_convergence_delta:
             baselines = tuple(
-                GaussianFilter(self.max_log_sigma)(input)
+                GaussianFilter(self.max_log_sigma).cuda()(input) if input.device.type == 'cuda' else GaussianFilter(self.max_log_sigma)(input)
                 for input in inputs
             )
             start_point, end_point = baselines, inputs
@@ -354,9 +362,14 @@ class IntegratedBlurredGradients(GradientAttribution):
 
         # scale features and compute gradients. (batch size is abbreviated as bsz)
         # scaled_features' dim -> (bsz * #steps x inputs[0].shape[1:], ...)
-        gaussian_filters = [
-            GaussianFilter(self.rescale_alpha(alpha)) for alpha in alphas
-        ]
+        if inputs[0].device.type == 'cuda':
+            gaussian_filters = [
+                GaussianFilter(self.rescale_alpha(alpha)).cuda() for alpha in alphas
+            ]
+        else:
+            gaussian_filters = [
+                GaussianFilter(self.rescale_alpha(alpha)) for alpha in alphas
+            ]
 
         scaled_features_tpl = tuple(
             torch.cat(
@@ -403,11 +416,23 @@ class IntegratedBlurredGradients(GradientAttribution):
             for grad in grads
         ]
 
+        # tests = [
+        #     torch.sum(grad.contiguous().view(n_steps, -1) * dfeature_dalpha, dim=1)
+        #     for grad, dfeature_dalpha in zip(grads, dfeatures_dalpha)
+        # ]
+
+        # tests2 = [
+        #     torch.stack([
+        #         torch.autograd.grad(self.forward_func(gf(input))[:, expanded_target], gf.log_sigma)[0] for gf in gaussian_filters
+        #     ])
+        #     for input in inputs
+        # ]
+        # print(torch.stack(tests + tests2).T)
         # aggregates across all steps for each tensor in the input tuple
         # total_grads has the same dimensionality as inputs
         total_grads = [
-            _reshape_and_sum(
-                scaled_grad * dfeature_dalpha, 
+            - _reshape_and_sum(
+                scaled_grad * dfeature_dalpha,
                 n_steps, grad.shape[0] // n_steps, grad.shape[1:])
             for scaled_grad, grad, dfeature_dalpha in zip(scaled_grads, grads, dfeatures_dalpha)
         ]

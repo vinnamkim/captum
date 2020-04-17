@@ -186,6 +186,10 @@ def attribute_image_features(algorithm, input, **kwargs):
     
     return tensor_attributions
         
+from captum.attr import GradientCornerDetection
+
+gcd = GradientCornerDetection(net)
+scores = gcd.attribute(input, target=labels[ind].item(), method='sampling', sampling_method='std', num_samples=1000, sample_std=1.0)
 
 # %% [markdown]
 # Computes gradients with respect to class `ind` and transposes them for visualization purposes.
@@ -200,12 +204,12 @@ grads = np.transpose(grads.squeeze().cpu().detach().numpy(), (1, 2, 0))
 
 # %%
 ig = IntegratedBlurredGradients(net)
-attr_ig, delta = attribute_image_features(ig, input, n_steps=20, return_convergence_delta=True)
+attr_ig, delta = attribute_image_features(ig, input, n_steps=50, return_convergence_delta=True)
 print('Approximation delta: ', abs(delta))
 from captum.attr._core.integrated_blurred_gradients import GaussianFilter
 gf = GaussianFilter(2.0)
 ig = IntegratedGradients(net)
-attr_ig, delta = attribute_image_features(ig, input, n_steps=2000, baselines=gf(input), return_convergence_delta=True)
+attr_ig, delta = attribute_image_features(ig, input, n_steps=50, baselines=gf(input), return_convergence_delta=True)
 attr_ig = np.transpose(attr_ig.squeeze().cpu().detach().numpy(), (1, 2, 0))
 print('Approximation delta: ', abs(delta))
 
