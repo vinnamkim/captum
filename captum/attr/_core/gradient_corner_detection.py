@@ -54,10 +54,11 @@ class GradientCornerDetection(GradientAttribution):
                 [gradient.to(dtype=torch.float64) for gradient in gradients]
             )
 
-        attributions = tuple(
-            [self.get_score_gpu(gradient, size, method, **kwargs)
-             for gradient in gradients]
-        )
+        with torch.no_grad():
+            attributions = tuple(
+                [self.get_score_gpu(input, gradient, size, method, **kwargs)
+                for input, gradient in zip(inputs, gradients)]
+            )
 
         undo_gradient_requirements(inputs, gradient_mask)
         return _format_attributions(is_inputs_tuple, attributions)
@@ -79,7 +80,8 @@ class GradientCornerDetection(GradientAttribution):
 
         return sampling_method, num_samples, sample_std
 
-    def get_score_gpu(self, gradient: Tensor, size: int = 2, method='noble', **kwargs) -> Tensor:
+    def get_score_gpu(self, input: Tensor, gradient: Tensor,
+                      size: int = 2, method='noble', **kwargs) -> Tensor:
         channels, height, width = gradient.shape[1], gradient.shape[2], gradient.shape[3]
 
         # 3-dim : (height x width) x channels x 1
@@ -104,7 +106,7 @@ class GradientCornerDetection(GradientAttribution):
         X = F.conv2d(X, weight=weight, bias=None, stride=1, padding=size,
                      dilation=1, groups=channels * channels)
         if method == 'noble':
-            # 3-dim : (height x width) x (channels x channels)
+            # 3-dim : (height x width) x channels x channels
             X_mat = X.unsqueeze(0).reshape(channels, channels, height, width).permute(
                 2, 3, 0, 1).reshape(-1, channels, channels)
 
@@ -114,24 +116,46 @@ class GradientCornerDetection(GradientAttribution):
             score = score.reshape(height, width)
         elif method == 'fro':
             score = X.norm(dim=1, keepdim=True)
+        elif method == 'shi-tomasi':
+            X_mat = X.unsqueeze(0).reshape(channels, channels, height, width).permute(
+                2, 3, 0, 1).reshape(-1, channels, channels)
+            
+            S, _ = torch.symeig(X_mat, eigenvectors=False)
+
+            return S[:, -1].reshape(height, width)
+
         elif method == 'sampling':
-            sampling_method, num_samples, sample_std = self.parse_sampling_kwargs(**kwargs)
+            sampling_method, num_samples, sample_std = self.parse_sampling_kwargs(
+                **kwargs)
+
+            # unfold = F.unfold(input, kernel_size, dilation=1, padding=size, stride=1).reshape(
+            #     1, channels, -1, height * width).squeeze(0).permute(2, 0, 1)
+            # diff = unfold - unfold.mean(2, keepdim=True)
+
+            # cov = diff.bmm(diff.permute(0, 2, 1)) / diff.shape[-1]
+            # L = torch.cholesky(cov, upper=False).to(dtype=X.dtype)
 
             # 3-dim : (height x width) x (channels x channels)
             X_mat = X.unsqueeze(0).reshape(channels, channels, height, width).permute(
                 2, 3, 0, 1).reshape(-1, channels, channels)
 
             samples = sample_std * torch.randn(
-                (X_mat.shape[0], num_samples, X_mat.shape[2]
-                 ), dtype=X_mat.dtype, device=X_mat.device
+                (X_mat.shape[0], num_samples, X_mat.shape[2]),
+                dtype=X_mat.dtype, device=X_mat.device
             )
+            samples /= samples.norm(dim=-1, keepdim=True)
+            #samples = torch.bmm(samples, L.permute(0, 2, 1))
 
             score = torch.bmm(samples, X_mat)
 
             if sampling_method == 'std':
-                score = (score * samples).sum(-1).std(-1).reshape(height, width)
+                score = (score * samples).sum(-1).sqrt().std(-1).reshape(height, width)
             elif sampling_method == 'mean':
-                score = (score * samples).sum(-1).std(-1).reshape(height, width)
+                score = (score * samples).sum(-1).sqrt().mean(-1).reshape(height, width)
+            elif sampling_method == 'min':
+                score = (score * samples).sum(-1).sqrt().min(-1)[0].reshape(height, width)
+            elif sampling_method == 'max':
+                score = (score * samples).sum(-1).sqrt().max(-1)[0].reshape(height, width)
         else:
             raise Exception(
                 'method should be one of {\'noble\', \'fro\', \'sampling\'}.')
@@ -155,7 +179,7 @@ class GradientCornerDetection(GradientAttribution):
                 sample = torch.randn([1000, channels], dtype=M.dtype)
                 score = torch.mm(sample, M)
                 score = score * sample
-                return score.sum(-1).std(-1)
+                return score.sum(-1).mean(-1)
         else:
             raise Exception('method should be one of {\'noble\', \'fro\'}.')
 
