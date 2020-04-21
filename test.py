@@ -189,7 +189,7 @@ def attribute_image_features(algorithm, input, **kwargs):
 from captum.attr import GradientCornerDetection
 
 gcd = GradientCornerDetection(net)
-scores = gcd.attribute(input, target=labels[ind].item(), method='sampling', sampling_method='min', num_samples=1000, sample_std=1.0)
+scores = gcd.attribute(input, target=labels[ind].item(), method='fro', sampling_method='min', num_samples=1000, sample_std=1.0)
 
 # %% [markdown]
 # Computes gradients with respect to class `ind` and transposes them for visualization purposes.

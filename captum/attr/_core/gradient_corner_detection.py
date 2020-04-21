@@ -63,22 +63,18 @@ class GradientCornerDetection(GradientAttribution):
         undo_gradient_requirements(inputs, gradient_mask)
         return _format_attributions(is_inputs_tuple, attributions)
 
-    def parse_sampling_kwargs(self, **kwargs) -> Tuple[str, int, float]:
+    def parse_sampling_kwargs(self, **kwargs) -> Tuple[str, int]:
         if 'sampling_method' not in kwargs:
             raise Exception(
                 'If you choose method=sampling, then you should set sampling_method argument.')
         if 'num_samples' not in kwargs:
             raise Exception(
                 'If you choose method=sampling, then you should set num_samples argument.')
-        if 'sample_std' not in kwargs:
-            raise Exception(
-                'If you choose method=sampling, then you should set sample_std argument.')
-
+        
         sampling_method = kwargs.get('sampling_method')
         num_samples = kwargs.get('num_samples')
-        sample_std = kwargs.get('sample_std')
-
-        return sampling_method, num_samples, sample_std
+        
+        return sampling_method, num_samples
 
     def get_score_gpu(self, input: Tensor, gradient: Tensor,
                       size: int = 2, method='noble', **kwargs) -> Tensor:
@@ -125,7 +121,7 @@ class GradientCornerDetection(GradientAttribution):
             return S[:, -1].reshape(height, width)
 
         elif method == 'sampling':
-            sampling_method, num_samples, sample_std = self.parse_sampling_kwargs(
+            sampling_method, num_samples = self.parse_sampling_kwargs(
                 **kwargs)
 
             # unfold = F.unfold(input, kernel_size, dilation=1, padding=size, stride=1).reshape(
@@ -139,7 +135,7 @@ class GradientCornerDetection(GradientAttribution):
             X_mat = X.unsqueeze(0).reshape(channels, channels, height, width).permute(
                 2, 3, 0, 1).reshape(-1, channels, channels)
 
-            samples = sample_std * torch.randn(
+            samples = torch.randn(
                 (X_mat.shape[0], num_samples, X_mat.shape[2]),
                 dtype=X_mat.dtype, device=X_mat.device
             )
@@ -160,7 +156,10 @@ class GradientCornerDetection(GradientAttribution):
             raise Exception(
                 'method should be one of {\'noble\', \'fro\', \'sampling\'}.')
 
-        return score
+        if score.dim() == 2:
+            score = score.unsqueeze(0).unsqueeze(0)
+
+        return score.repeat(1, channels, 1, 1)
 
     def get_score_cpu(self, gradient: Tensor, size: int = 2, method='noble', **kwargs) -> Tensor:
         channels, height, width = gradient.shape[1], gradient.shape[2], gradient.shape[3]
