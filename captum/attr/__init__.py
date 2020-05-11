@@ -9,6 +9,7 @@ from ._core.guided_backprop_deconvnet import GuidedBackprop
 from ._core.guided_grad_cam import GuidedGradCam  # noqa
 from ._core.input_x_gradient import InputXGradient  # noqa
 from ._core.integrated_gradients import IntegratedGradients  # noqa
+from ._core.attributional_corner_detection import AttributionalCornerDetection  # noqa
 from ._core.gradient_corner_detection import GradientCornerDetection  # noqa
 from ._core.integrated_blurred_gradients import IntegratedBlurredGradients  # noqa
 from ._core.layer.grad_cam import LayerGradCam  # noqa

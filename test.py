@@ -186,10 +186,13 @@ def attribute_image_features(algorithm, input, **kwargs):
     
     return tensor_attributions
         
-from captum.attr import GradientCornerDetection
+from captum.attr import GradientCornerDetection, AttributionalCornerDetection
 
-gcd = GradientCornerDetection(net)
-scores = gcd.attribute(input, target=labels[ind].item(), method='fro', sampling_method='min', num_samples=1000, sample_std=1.0)
+gcd = AttributionalCornerDetection(net)
+scores = gcd.attribute(
+    input, target=labels[ind].item(), 
+    kernel_type='gaussian', kernel_size=7, kernel_sigma=1.0,
+    method='fro', sampling_method='min', num_samples=1000, sample_std=1.0)
 
 # %% [markdown]
 # Computes gradients with respect to class `ind` and transposes them for visualization purposes.
