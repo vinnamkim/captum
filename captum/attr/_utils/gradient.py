@@ -32,7 +32,7 @@ def apply_gradient_requirements(inputs: Tuple[Tensor, ...]) -> List[bool]:
                 "Input Tensor %d did not already require gradients, "
                 "required_grads has been set automatically." % index
             )
-            input.requires_grad_()
+            # input.requires_grad_()
         if input.grad is not None:
             if torch.sum(torch.abs(input.grad)).item() > 1e-7:
                 warnings.warn(
@@ -415,6 +415,123 @@ def compute_layer_gradients_and_eval(
 
 
 def compute_layer_gradients_and_eval(
+    forward_fn: Callable,
+    layer: Module,
+    inputs: Union[Tensor, Tuple[Tensor, ...]],
+    target_ind: TargetType = None,
+    additional_forward_args: Any = None,
+    gradient_neuron_index: Union[None, int, Tuple[int, ...]] = None,
+    device_ids: Union[None, List[int]] = None,
+    attribute_to_layer_input: bool = False,
+    output_fn: Union[None, Callable] = None,
+) -> Union[
+    Tuple[Tuple[Tensor, ...], Tuple[Tensor, ...], bool],
+    Tuple[Tuple[Tensor, ...], Tuple[Tensor, ...], Tuple[Tensor, ...], bool],
+]:
+    r"""
+        Computes gradients of the output with respect to a given layer as well
+        as the output evaluation of the layer for an arbitrary forward function
+        and given input.
+
+        For data parallel models, hooks are executed once per device ,so we
+        need to internally combine the separated tensors from devices by
+        concatenating based on device_ids. Any necessary gradients must be taken
+        with respect to each independent batched tensor, so the gradients are
+        computed and combined appropriately.
+
+        More information regarding the behavior of forward hooks with DataParallel
+        models can be found in the PyTorch data parallel documentation. We maintain
+        the separate inputs in a dictionary protected by a lock, analogous to the
+        gather implementation for the core PyTorch DataParallel implementation.
+
+        NOTE: To properly handle inplace operations, a clone of the layer output
+        is stored. This structure inhibits execution of a backward hook on the last
+        module for the layer output when computing the gradient with respect to
+        the input, since we store an intermediate clone, as
+        opposed to the true module output. If backward module hooks are necessary
+        for the final module when computing input gradients, utilize
+        _forward_layer_eval_with_neuron_grads instead.
+
+        Args:
+
+            forward_fn: forward function. This can be for example model's
+                        forward function.
+            layer:      Layer for which gradients / output will be evaluated.
+            inputs:     Input at which gradients are evaluated,
+                        will be passed to forward_fn.
+            target_ind: Index of the target class for which gradients
+                        must be computed (classification only).
+            output_fn:  An optional function that is applied to the layer inputs or
+                        outputs depending whether the `attribute_to_layer_input` is
+                        set to `True` or `False`
+            args:       Additional input arguments that forward function requires.
+                        It takes an empty tuple (no additional arguments) if no
+                        additional arguments are required
+
+
+        Returns:
+            2-element tuple of **gradients**, **evals**:
+            - **gradients**:
+                Gradients of output with respect to target layer output.
+            - **evals**:
+                Target layer output for given input.
+    """
+    with torch.autograd.set_grad_enabled(True):
+        # saved_layer is a dictionary mapping device to a tuple of
+        # layer evaluations on that device.
+        saved_layer, output, is_layer_tuple = _forward_layer_distributed_eval(
+            forward_fn,
+            inputs,
+            layer,
+            target_ind=target_ind,
+            additional_forward_args=additional_forward_args,
+            attribute_to_layer_input=attribute_to_layer_input,
+            forward_hook_with_return=True,
+        )
+        assert output[0].numel() == 1, (
+            "Target not provided when necessary, cannot"
+            " take gradient with respect to multiple outputs."
+        )
+
+        device_ids = _extract_device_ids(forward_fn, saved_layer, device_ids)
+
+        # Identifies correct device ordering based on device ids.
+        # key_list is a list of devices in appropriate ordering for concatenation.
+        # If only one key exists (standard model), key list simply has one element.
+        key_list = _sort_key_list(list(saved_layer.keys()), device_ids)
+
+        all_outputs = _reduce_list(
+            [
+                saved_layer[device_id]
+                if output_fn is None
+                else output_fn(saved_layer[device_id])
+                for device_id in key_list
+            ]
+        )
+        num_tensors = len(saved_layer[next(iter(saved_layer))])
+        grad_inputs = tuple(
+            layer_tensor
+            for device_id in key_list
+            for layer_tensor in saved_layer[device_id]
+        )
+        saved_grads = torch.autograd.grad(torch.unbind(output), grad_inputs)
+        saved_grads = [
+            saved_grads[i : i + num_tensors]
+            for i in range(0, len(saved_grads), num_tensors)
+        ]
+        if output_fn is not None:
+            saved_grads = [output_fn(saved_grad) for saved_grad in saved_grads]
+
+        all_grads = _reduce_list(saved_grads)
+        if gradient_neuron_index is not None:
+            inp_grads = _neuron_gradients(
+                inputs, saved_layer, key_list, gradient_neuron_index
+            )
+            return all_grads, all_outputs, inp_grads, is_layer_tuple
+    return all_grads, all_outputs, is_layer_tuple
+
+
+def compute_layer_gradients_and_eval_with_noise(
     forward_fn: Callable,
     layer: Module,
     inputs: Union[Tensor, Tuple[Tensor, ...]],

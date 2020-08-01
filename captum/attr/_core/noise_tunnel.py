@@ -28,6 +28,8 @@ class NoiseTunnelType(Enum):
     smoothgrad = 1
     smoothgrad_sq = 2
     vargrad = 3
+    none = 4
+    none_sq = 5
 
 
 SUPPORTED_NOISE_TUNNEL_TYPES = list(NoiseTunnelType.__members__.keys())
@@ -254,6 +256,15 @@ class NoiseTunnel(Attribution):
             # update kwargs with expanded baseline
             kwargs["target"] = target
 
+        def return_noise_attributions(attribution):
+            bsz = attribution.shape[0] // n_samples
+            attribution_shape = (bsz, n_samples)
+            if len(attribution.shape) > 1:
+                attribution_shape += attribution.shape[1:]
+
+            attribution = attribution.view(attribution_shape)
+            return attribution
+
         def compute_expected_attribution_and_sq(attribution):
             bsz = attribution.shape[0] // n_samples
             attribution_shape = (bsz, n_samples)
@@ -295,6 +306,12 @@ class NoiseTunnel(Attribution):
 
         is_attrib_tuple = _is_tuple(attributions)
         attributions = _format_tensor_into_tuples(attributions)
+
+        if NoiseTunnelType[nt_type] == NoiseTunnelType.none:
+            return tuple([return_noise_attributions(attribution) for attribution in attributions])
+
+        if NoiseTunnelType[nt_type] == NoiseTunnelType.none_sq:
+            return tuple([return_noise_attributions(attribution) ** 2 for attribution in attributions])
 
         expected_attributions = []
         expected_attributions_sq = []
