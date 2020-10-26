@@ -36,7 +36,8 @@ def get_gaussian_kernel(kernel_size, sigma, channels, dtype, device):
 
     # Reshape to 2d depthwise convolutional weight
     gaussian_kernel = gaussian_kernel.view(1, 1, kernel_size, kernel_size)
-    gaussian_kernel = gaussian_kernel.repeat(channels * channels, 1, 1, 1).to(dtype=dtype, device=device)
+    gaussian_kernel = gaussian_kernel.repeat(
+        channels * channels, 1, 1, 1).to(dtype=dtype, device=device)
     return gaussian_kernel
 
 
@@ -112,19 +113,19 @@ class AttributionalCornerDetection(GradientAttribution):
     def get_score_gpu(self, input: Tensor, gradient: Tensor,
                       kernel_type: str, kernel_size: int, kernel_sigma: float,
                       method: str, **kwargs) -> Tensor:
-        channels, height, width = gradient.shape[1], gradient.shape[2], gradient.shape[3]
+        batch_size, channels, height, width = \
+            gradient.shape[0], gradient.shape[1], gradient.shape[2], gradient.shape[3]
+        # 5-dim : batch_size x height x width x channels x 1
+        X = gradient.permute(0, 2, 3, 1).unsqueeze(-1)
+        # print(X.shape)
 
-        # 3-dim : (height x width) x channels x 1
-        X = gradient.flatten(2).permute(2, 1, 0)
+        # 4-dim : batch_size x height x width x (channels x channels)
+        X = torch.matmul(X, X.transpose(4, 3)).flatten(3)
+        # print(X.shape)
 
-        # 3-dim : (height x width) x channels x channels
-        X = torch.bmm(X, X.permute(0, 2, 1))
-
-        # 2-dim : (height x width) x (channels x channels)
-        X = X.reshape(-1, channels * channels)
-
-        # 4-dim : 1 x (channels x channels) x height x width
-        X = X.reshape(height, width, channels * channels).permute(2, 0, 1).unsqueeze(0)
+        # 4-dim : batch_size x (channels x channels) x height x width
+        X = X.permute(0, 3, 1, 2)
+        # print(X.shape)
 
         if kernel_type == 'window':
             weight = torch.ones(
@@ -138,28 +139,32 @@ class AttributionalCornerDetection(GradientAttribution):
             raise Exception('Unknown kernel type : {}'.format(kernel_type))
 
         # Get a sensitivity matrix X for a rgb perturbation vector
-        # 4-dim : 1 x (channels x channels) x height x width
+        # 4-dim : batch_size x (channels x channels) x height x width
         X = F.conv2d(X, weight=weight, bias=None, stride=1, padding=(kernel_size - 1) // 2,
                      dilation=1, groups=channels * channels)
+        #print('conv', X.shape)
+
+        # 4-dim : batch_size x height x width x channels x channels
+        X = X.permute(0, 2, 3, 1).reshape(
+            batch_size, height, width, channels, channels)
+        #print('X_mat', X.shape)
+
         if method == 'noble':
-            # 3-dim : (height x width) x channels x channels
-            X_mat = X.unsqueeze(0).reshape(channels, channels, height, width).permute(
-                2, 3, 0, 1).reshape(-1, channels, channels)
-
-            X_det = torch.det(X_mat)
-            X_trace = X_mat.diagonal(dim1=-2, dim2=-1).sum(-1)
-            score = 2 * X_det / (X_trace + 1e-6)
-            score = score.reshape(height, width)
+            X_det = torch.det(X)
+            # print(X_det.shape)
+            X_trace = X.diagonal(dim1=-2, dim2=-1).sum(-1)
+            # print(X_trace.shape)
+            score = (X_det / (X_trace + 1e-6)).unsqueeze(1)
+            # print(score.shape)
         elif method == 'fro':
-            score = X.norm(dim=1, keepdim=True)
-        elif method == 'shi-tomasi':
-            X_mat = X.unsqueeze(0).reshape(channels, channels, height, width).permute(
-                2, 3, 0, 1).reshape(-1, channels, channels)
-
-            S, _ = torch.symeig(X_mat, eigenvectors=False)
-
-            return S[:, -1].reshape(height, width)
-
+            score = X.norm(p='fro', dim=(3, 4), keepdim=False).unsqueeze(1)
+            # print(score.shape)
+        elif method == 'min':
+            # S = torch.lobpcg(X, k=1, largest=False)
+            # print(S)
+            # S, _ = torch.symeig(X, eigenvectors=False)
+            # print(S.shape)
+            raise Exception('Do not method=min.')
         elif method == 'sampling':
             sampling_method, num_samples = self.parse_sampling_kwargs(
                 **kwargs)
@@ -196,7 +201,7 @@ class AttributionalCornerDetection(GradientAttribution):
                     score * samples).sum(-1).sqrt().max(-1)[0].reshape(height, width)
         else:
             raise Exception(
-                'method should be one of {\'noble\', \'fro\', \'sampling\'}.')
+                f'method should be one of [noble, fro, min, sampling]. But it is {method}.')
 
         if score.dim() == 2:
             score = score.unsqueeze(0).unsqueeze(0)

@@ -21,7 +21,6 @@ from ._core.layer.layer_deep_lift import LayerDeepLiftShap
 from ._core.layer.layer_gradient_shap import LayerGradientShap  # noqa
 from ._core.layer.layer_gradient_x_activation import LayerGradientXActivation  # noqa
 from ._core.layer.layer_integrated_gradients import LayerIntegratedGradients  # noqa
-from ._core.layer.layer_saliency import LayerSaliency  # noqa
 from ._core.neuron.neuron_conductance import NeuronConductance  # noqa
 from ._core.neuron.neuron_deep_lift import NeuronDeepLift  # noqa
 from ._core.neuron.neuron_deep_lift import NeuronDeepLiftShap
