@@ -99,14 +99,18 @@ class AttributionalCornerDetection(GradientAttribution):
 
     def parse_sampling_kwargs(self, **kwargs) -> Tuple[str, int]:
         if 'sampling_method' not in kwargs:
-            raise Exception(
+            print(
                 'If you choose method=sampling, then you should set sampling_method argument.')
-        if 'num_samples' not in kwargs:
-            raise Exception(
-                'If you choose method=sampling, then you should set num_samples argument.')
+            sampling_method = 100
+        else:
+            sampling_method = kwargs.get('sampling_method')
 
-        sampling_method = kwargs.get('sampling_method')
-        num_samples = kwargs.get('num_samples')
+        if 'num_samples' not in kwargs:
+            print(
+                'If you choose method=sampling, then you should set num_samples argument.')
+            num_samples = 100
+        else:
+            num_samples = kwargs.get('num_samples')
 
         return sampling_method, num_samples
 
@@ -154,17 +158,31 @@ class AttributionalCornerDetection(GradientAttribution):
             # print(X_det.shape)
             X_trace = X.diagonal(dim1=-2, dim2=-1).sum(-1)
             # print(X_trace.shape)
-            score = (X_det / (X_trace + 1e-6)).unsqueeze(1)
+            score = X_det / (X_trace + 1e-6)
+            
+            score.unsqueeze_(1)
             # print(score.shape)
         elif method == 'fro':
-            score = X.norm(p='fro', dim=(3, 4), keepdim=False).unsqueeze(1)
+            score = X.norm(p='fro', dim=(3, 4), keepdim=False)
+
+            score.unsqueeze_(1)
             # print(score.shape)
         elif method == 'min':
-            # S = torch.lobpcg(X, k=1, largest=False)
-            # print(S)
-            # S, _ = torch.symeig(X, eigenvectors=False)
-            # print(S.shape)
-            raise Exception('Do not method=min.')
+            num_samples = 300
+            samples = torch.randn(
+                (channels, num_samples),
+                dtype=X.dtype, device=X.device
+            )
+            samples /= samples.norm(dim=-2, keepdim=True)
+
+            score, _ = (
+                torch.matmul(X, samples)
+                * samples.reshape(1, 1, 1, samples.shape[0], samples.shape[1])
+            ).sum(-2).min(-1)
+
+            score.unsqueeze_(1)
+
+            # values, vectors = torch.eig(X[1,1,1,:,:], eigenvectors=True)
         elif method == 'sampling':
             sampling_method, num_samples = self.parse_sampling_kwargs(
                 **kwargs)
