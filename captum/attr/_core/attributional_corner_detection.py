@@ -159,7 +159,7 @@ class AttributionalCornerDetection(GradientAttribution):
             X_trace = X.diagonal(dim1=-2, dim2=-1).sum(-1)
             # print(X_trace.shape)
             score = X_det / (X_trace + 1e-6)
-            
+
             score.unsqueeze_(1)
             # print(score.shape)
         elif method == 'fro':
@@ -167,8 +167,12 @@ class AttributionalCornerDetection(GradientAttribution):
 
             score.unsqueeze_(1)
             # print(score.shape)
+        elif method == 'trace':
+            score = X.diagonal(dim1=-2, dim2=-1).sum(-1)
+            score.unsqueeze_(1)
+
         elif method == 'min':
-            num_samples = 300
+            num_samples = kwargs.get('num_samples', 100)
             samples = torch.randn(
                 (channels, num_samples),
                 dtype=X.dtype, device=X.device
