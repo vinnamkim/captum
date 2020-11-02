@@ -116,7 +116,7 @@ class AttributionalCornerDetection(GradientAttribution):
 
     def get_score_gpu(self, input: Tensor, gradient: Tensor,
                       kernel_type: str, kernel_size: int, kernel_sigma: float,
-                      method: str, **kwargs) -> Tensor:
+                      method: str, force_div_median: bool=True, **kwargs) -> Tensor:
         batch_size, channels, height, width = \
             gradient.shape[0], gradient.shape[1], gradient.shape[2], gradient.shape[3]
         # 5-dim : batch_size x height x width x channels x 1
@@ -139,6 +139,9 @@ class AttributionalCornerDetection(GradientAttribution):
             weight = get_gaussian_kernel(
                 kernel_size=kernel_size, sigma=kernel_sigma, channels=channels,
                 dtype=X.dtype, device=X.device)
+
+            if force_div_median:
+                weight /= weight.median()
         else:
             raise Exception('Unknown kernel type : {}'.format(kernel_type))
 
