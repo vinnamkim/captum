@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
+import math
 from typing import Any, Callable, Tuple
 
-import torch.nn.functional as F
 import torch
+import torch.nn.functional as F
 from torch import Tensor
-import math
+
 from ..._utils.common import _format_input, _is_tuple
 from ..._utils.typing import TargetType, TensorOrTupleOfTensorsGeneric
 from .._utils.attribution import GradientAttribution
@@ -39,6 +40,61 @@ def get_gaussian_kernel(kernel_size, sigma, channels, dtype, device):
     gaussian_kernel = gaussian_kernel.repeat(
         channels * channels, 1, 1, 1).to(dtype=dtype, device=device)
     return gaussian_kernel
+
+
+class LocalPatchGradientAttribution(GradientAttribution):
+    def __init__(self, forward_func: Callable) -> None:
+        r"""
+        Args:
+
+                forward_func (callable):  The forward function of the model or any
+                                          modification of it
+        """
+        GradientAttribution.__init__(self, forward_func)
+
+    def attribute(
+            self,
+            inputs: TensorOrTupleOfTensorsGeneric,
+            target: TargetType = None,
+            kernel_size: int = 7,
+            additional_forward_args: Any = None,
+            **kwargs
+    ) -> TensorOrTupleOfTensorsGeneric:
+        # Keeps track whether original input is a tuple or not before
+        # converting it into a tuple.
+        is_inputs_tuple = _is_tuple(inputs)
+
+        inputs = _format_input(inputs)
+        gradient_mask = apply_gradient_requirements(inputs)
+
+        gradients = self.gradient_func(
+            self.forward_func, inputs, target, additional_forward_args
+        )
+
+        with torch.no_grad():
+            attributions = tuple(
+                [self.get_score_gpu(gradient, kernel_size)
+                 for input, gradient in zip(inputs, gradients)]
+            )
+
+        undo_gradient_requirements(inputs, gradient_mask)
+        return _format_attributions(is_inputs_tuple, attributions)
+
+    def get_score_gpu(self, gradient : torch.Tensor, kernel_size: int):
+        batch_size, channels, height, width = \
+            gradient.shape[0], gradient.shape[1], gradient.shape[2], gradient.shape[3]
+
+        weight = torch.ones(
+            size=[1, channels, kernel_size, kernel_size],
+            dtype=gradient.dtype, device=gradient.device)
+
+        score = F.conv2d(
+            gradient,
+            weight=weight, bias=None,
+            stride=1, padding=(kernel_size - 1) // 2,
+            dilation=1, groups=1)
+
+        return score.repeat(1, channels, 1, 1)
 
 
 class AttributionalCornerDetection(GradientAttribution):
@@ -116,7 +172,7 @@ class AttributionalCornerDetection(GradientAttribution):
 
     def get_score_gpu(self, input: Tensor, gradient: Tensor,
                       kernel_type: str, kernel_size: int, kernel_sigma: float,
-                      method: str, force_div_median: bool=True, **kwargs) -> Tensor:
+                      method: str, force_div_median: bool = True, **kwargs) -> Tensor:
         batch_size, channels, height, width = \
             gradient.shape[0], gradient.shape[1], gradient.shape[2], gradient.shape[3]
         # 5-dim : batch_size x height x width x channels x 1
