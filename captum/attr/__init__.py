@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 
+from ._core.attributional_corner_detection import AttributionalCornerDetection  # noqa
+from ._core.attributional_corner_detection import LocalPatchGradientAttribution
 from ._core.deep_lift import DeepLift, DeepLiftShap  # noqa
 from ._core.feature_ablation import FeatureAblation  # noqa
 from ._core.feature_permutation import FeaturePermutation  # noqa
+from ._core.gradient_corner_detection import GradientCornerDetection  # noqa
 from ._core.gradient_shap import GradientShap  # noqa
 from ._core.guided_backprop_deconvnet import Deconvolution  # noqa
 from ._core.guided_backprop_deconvnet import GuidedBackprop
 from ._core.guided_grad_cam import GuidedGradCam  # noqa
 from ._core.input_x_gradient import InputXGradient  # noqa
-from ._core.integrated_gradients import IntegratedGradients  # noqa
-from ._core.attributional_corner_detection import AttributionalCornerDetection  # noqa
-from ._core.gradient_corner_detection import GradientCornerDetection  # noqa
 from ._core.integrated_blurred_gradients import IntegratedBlurredGradients  # noqa
+from ._core.integrated_gradients import IntegratedGradients  # noqa
 from ._core.layer.grad_cam import LayerGradCam  # noqa
 from ._core.layer.internal_influence import InternalInfluence  # noqa
 from ._core.layer.layer_activation import LayerActivation  # noqa
